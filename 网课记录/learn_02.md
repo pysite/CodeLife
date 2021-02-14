@@ -567,4 +567,139 @@ string sub = base.substr(0,3);	//sub是abc
 - ``resize(int num)``               //注意若容器变长，则以默认值填充新位置
 - ``resize(int num, elem)``  //注意若容器变长，则以elem填充新位置
 
-P200
+
+
+#### vector插入和删除
+
+- ``push_back(ele)``
+- ``pop_back()``
+- ``insert(const_iterator pos, ele)``  //注意pos是迭代器，不是int类型
+- ``insert(const_iterator pos, int count, ele)``
+- ``erase(const_iterator pos)``
+- ``erase(const_iterator start, const_iterator end)``
+- ``clear()``  //删除容器中所有元素
+
+#### vector数据存取
+
+- ``at(int idx)``
+- ``operator[]``
+- ``front()``  //返回容器中第一个数据元素
+- ``back()``    //返回容器中最后一个数据元素
+
+#### vector互换容器
+
+- ``swap(vec)``  //将vec与本身的元素互换，不是复制
+
+```c++
+//swap实际用途：巧用swap可以收缩内存空间
+//resize只会改变size，不会缩小分配的内存capacity
+//想缩小capacity，可以新建一个vector再swap，之后再delete原来的vector
+vector<int> v1 = vector(10000,1);
+vector<int>(v1).swap(v1);	
+//新拷贝构造一个匿名vector，之后再调用swap和原来的vector互换就可缩小原来vec的capacity，底层原理类似于指针互换那样
+```
+
+#### vector预留空间
+
+- ``reserve(int len)``  //容器预留个len个元素长度，预留位置不可初始化，元素不可访问
+
+此函数用来减少重新扩展内存的操作的次数；
+
+
+
+### deque容器
+
+#### deque基本概念
+
+**deque与vector的区别**：
+
+- vector对于头部的插入删除效率低，数据量越大，效率越低
+- deque相对而言，对头部的插入删除速度会比vector快
+- vector访问元素时的速度会比deque快，这和两者内部实现有关（感觉就是vector是数组，deque是~~链表实现~~？是中控器实现）
+
+deque迭代器依然是支持随机访问的迭代器
+
+
+
+**deque内部工作原理**：
+
+deque内部有个**中控器**，维护每段缓冲区中的内容，缓冲区中存放真实数据；
+
+中控器维护的是每个缓冲区的地址，使得使用deque时像一片连续的内存空间；
+
+即deque是由**一段一段数组**组成的；
+
+> 中控器: ... 0x01 0x02 ...
+>
+> 实际缓冲区:
+>
+> ​	0x01: 0		0		0	   elem elem
+>
+> ​	0x02: elem elem elem elem elem
+
+
+
+#### deque构造函数
+
+- ``deque<T> d``
+- ``deque(d.begin(), d.end())``
+- ``deque(n, elem)``
+- ``deque(const deque &deq);``
+
+#### deque赋值操作
+
+- ``deque& operator=(const deque &deq)``
+- ``assign(d.begin(), d.end())``
+- ``assign(n, elem)``
+
+#### deque大小操作
+
+> 和vector相同，但是没有capacity，因为deque是由中控器控制，没有容量的概念（可以无限扩）
+
+- ``deque.empty()``
+- ``deque.size()``
+- ``deque.resize(num)``
+- ``deque.resize(num, elem)``
+
+#### deque插入和删除
+
+两端插入操作：
+
+- ``push_back(elem)``
+- ``push_front(elem)``
+- ``pop_back()``
+- ``pop_front()``
+
+指定位置操作：
+
+> 这里的pos是iterator，而非index
+
+- ``insert(pos, elem)``	
+- ``insert(pos, n, elem)``
+- ``insert(pos, beg, end)``
+- ``clear()``
+- ``erase(begin, end)``
+- ``erase(pos)``
+
+#### deque数据存取
+
+- ``at(int idx)``
+- ``operator[]``
+- ``front()``
+- ``back()``
+
+#### deque排序
+
+- ``sort(iterator begin, iterator end)``
+
+```c++
+#include<deque>
+#include<algorithm>
+deque<int> d;
+...
+sort(d.begin(), d.end());	//默认按照升序
+```
+
+对于支持随机访问的迭代器的容器都可以利用sort算法直接对其进行排序；
+
+P211
