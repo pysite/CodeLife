@@ -985,7 +985,7 @@ getMin() —— 检索栈中的最小元素。
 
 - 再设置两个数组prefix和suffix（前缀和后缀），分别表示i所在分组的前缀的最大值和i所在分组的后缀的最大值；
 
-  ![image-20210430112348515](D:\OneDrive\image02.png)
+  ![image-20210430112348515](images/image02.png)
 
 - i到i+k-1的窗口中的最大值就是suffixMax[i]和prefixMax[i+k-1]中的较大值；
 
