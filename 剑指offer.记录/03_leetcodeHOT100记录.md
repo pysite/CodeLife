@@ -1,3 +1,7 @@
+[toc]
+
+
+
 ## 1.两数之和
 
 题目：给定一个整数数组 nums 和一个整数目标值 target，请你在该数组中找出 和为目标值 的那 两个 整数，并返回它们的数组下标。
@@ -1366,6 +1370,21 @@ coins =  3*1*5    +   3*5*8   +  1*3*8  + 1*8*1 = 167
 - 这是一道图论题
 - A/B=3，则在dp数组中让dp[A] [B] = 3，且dp[B] [A] = 1/3;
 - 构建完dp数组后，用floyd求两点间最短距离，query[a] [b]的答案就是dp[a] [b]，如果dp[a] [b]不存在就返回-1；
+
+```c++
+for (int i=0;i<n;i++){
+    for (int j=0;j<n;j++){
+        for (int k=0;k<n;k++){
+            if(j==k||graph[j][k]!=0) continue;
+            if(graph[j][i]!=0&&graph[i][k]!=0){
+                graph[j][k]=graph[j][i]*graph[i][k];
+            }
+        }
+    }
+}
+```
+
+
 
 
 
