@@ -12,4 +12,5 @@
 
 Rust：https://kaisery.github.io/trpl-zh-cn/ch02-00-guessing-game-tutorial.html
 
-rCore：https://rcore-os.github.io/rCore_tutorial_doc/chapter2/part5.html
+rCore：https://rcore-os.github.io/rCore_tutorial_doc/chapter3/part4.html
+
