@@ -1,3 +1,9 @@
+> 2021-12-01更新：
+>
+> 谷歌自己对Chubby的总结：
+>
+> A Chubby service consists of five active replicas, one of which is elected to be the master and actively serve requests. The service is live when a majority of the replicas are running and can communicate with each other. Chubby uses the Paxos algorithm [Chandra et al. 2007; Lamport 1998] to keep its replicas consistent in the face of failure. Chubby provides a namespace that consists of directories and small files. Each directory or file can be used as a lock, and reads and writes to a file are atomic. The Chubby client library provides consistent caching of Chubby files. Each Chubby client maintains a session with a Chubby service. A client’s session expires if it is unable to renew its session lease within the lease expiration time. When a client’s session expires, it loses any locks and open handles. Chubby clients can also register callbacks on Chubby files and directories for notification of changes or session expiration.
+
 ## 0 Abstract
 
 Chubby旨在为**松散（loosely-coupled）分布式系统**提供一套**粗粒度锁服务**，以及**可靠的存储服务**。
