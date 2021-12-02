@@ -134,3 +134,120 @@ master可以track每个tablet的状态。Tablets发生变动情况大多数由ma
 
 ### 5.3 Tablet Serving
 
+> 下图是一个**tablet**的结构：
+
+![image-20211202165038598](./images/image008.png)
+
+Bigtable中数据的持久化存储是存储在GFS中。GFS存储有**commit log**和**SSTable Files**，其中commit log就是write操作的日志记录（可用于redo以恢复文件），SSTable Files就是之前古老版本的文件（已经永久化的旧版本data）。内存中主要是**memtable**，存的是最近有修改的数据，以row为单位进行存储，采用的结构是sorted buffer，每一row采用copy-on-write策略来维护一致性（这里的cow暂时没懂）。
+
+为了恢复一个tablet，tablet server会去metadata table中得到该tablet的元数据，主要目的是获取**SSTable文件的list**以及**commit log文件中的redo points**。有了这两个数据后，tablet server就会先去将所有SSTable文件的block index读取到内存，再在其基础上应用log中redo point之后记载的操作序列来恢复memtable部分。
+
+#### 5.3.1 写操作：
+
+1. 检测该write请求是否来自一个正常的client；
+2. 检测该client是否有权限进行write操作。通过读取Chubby中一个特定文件（上面记载了有权限进行write的用户列表）来进行检测。
+3. 将此次write请求记录到在GFS中的commit log文件。
+4. 将此次write的数据写到内存中的memtable里。
+
+#### 5.3.2 读操作
+
+1. 也是检测client是否正常、是否有权限。
+2. Tablet server结合GFS中的SSTable文件和内存中的memtable，生成并返回给client所需的数据。
+
+> 注意这里我想说明的是，不同SSTable文件之间，以及SSTable文件和memtable的数据之间，可能含有同一个row的不同版本数据，其中的数据都是按照row为单位进行排序存储的，因此在生成一行数据时，实际上是从多个版本进行merge整合生成的。
+
+
+
+### 5.4 Compaction
+
+为了避免write请求导致内存中memtable无限制地增大，因此memtable每增大到一定阈值时就会被"冻结"：tablet会新建新的memtable，而用这个memtable生成一个新的SSTable文件，并在commit log文件设定新的redo point（因为这些数据被永久化了）。（因此每个SSTable文件其实就是过去的一个memtable）
+
+当然随着时间增加，SSTable文件数量也会逐渐增多，为了减少生成read数据时所要读取的SSTable文件数量，tablet server会时不时地执行merging compaction操作，就是将"多个SSTable文件"或者"多个SSTable文件和memtable"合并成一个SSTable文件。
+
+Tablet server会周期性地将所有SSTable文件合并成一个SSTable文件，目的是垃圾回收（回收那些已经被删除的row数据的空间）。这种操作称为"major compaction"，非major的compaction操作生成的SSTable文件中含有delete entry，也就是表示该位置上的旧数据已经被删除。而major compaction生成的数据中由于被删除的数据不存在了，因此也没有delete entry。
+
+#### 5.4.1 GFS和Bigtable的局部性配合
+
+一些主机既是Bigtable中的tablet server，也是GFS中的chunk server。GFS在存储Bigtable中的SSTable文件的replica时，就会存储一份数据在本地的chunk server中。这样当Bigtable需要这些数据时，会优先到本地GFS中获取，就会非常快速。
+
+
+
+### 5.5 Schema Management
+
+就是说Bigtable将数据库schema存储在Chubby中（称"schema文件"），所有tablet server想要知道当前存在哪些column family只需要查看Chubby中的schema文件即可。并且也可以通过订阅Chubby中schema文件的改动event来得知用户对column有修改。
+
+
+
+## 6 Refinements优化
+
+### 6.1 Locality Groups
+
+就是说将一些经常一起读取的column families组成一个locality group。比如在web数据中，将一个网页的各个元数据组成一个locality group，将网页内容数据组成一个locality group。因为在一些应用中，可能有时候只需要读取各个页面的元数据而不需要里面的大段内容。在进行SSTable合并的过程中，可以根据Locality group来为每个group生成一个SSTable。
+
+> 本质上就是将相关的column family进行隔离存储，以提升性能。
+
+用户可以以locality group为单位进行一些优化配置，例如可以指定哪些locality group的SSTable文件常驻在内存中，以加快访问速度。比如在metadata table中，其中table-location这个group就是常驻在内存的，因此可以提升性能。
+
+
+
+### 6.2 Compression
+
+用户可以为locality group设置对其中的数据进行压缩存储，并且可以设定压缩算法。用户指定的格式会被应用到每个SSTable块（大小可以通过参数调节）虽然分开压缩每个块损失了一些空间，但好处在于无需解压缩整个文件就能读取SSTable的一小部分。许多客户端使用两遍自定义压缩方式。第一次使用Bentley and McIlroy’s scheme，它将压缩大窗口中的长公共字符串。第二次使用一个快速压缩算法，寻找16KB窗口大小数据中的重复部分。两次压缩都很快，压缩100-200MB/s，解压缩400-1000MB/s（当时的机器）。
+
+在采用上述的两遍压缩算法时，把相似数据存储在相邻的行、把数据的不同version存储在相邻位置等设计能使得数据压缩比增大，例如对于google的web page data能达到10：1的比例。
+
+
+
+### 6.3 Caching for Read Performance
+
+有两层cache。Scan Cache是tablet server缓存从SSTable中每次查询得到的**KV键值对**。Block Cache则是较为底层，缓存每次从GFS中读取的**SSTable blocks**。
+
+
+
+### 6.4 Bloom Filters
+
+Client可以为locality group配置布隆过滤器，布隆过滤器的作用是可以查询一个SSTable是否存储有所需row/column的数据，从而减少不必要的SSTable文件读取次数。（每个SSTable文件只含有部分row/column键值）
+
+
+
+### 6.5 Commit-Log Implementation
+
+每个tablet server只有一个log file，即多个tablets共享一个log file。单一log file使得性能明显提升，但是也使故障恢复变得非常复杂。
+
+#### 6.5.1 当tablet server故障时
+
+当一个tablet server故障时，上面的tablets会被分发给不同的其它tablet server。为了恢复一个tablet，这些新tablet servers都要去从故障server中唯一的log file中找到每个tablet的redo point。
+
+如果采用简单机制，例如每个新tablet server都去完整地读取一份旧log file，则会造成大量没必要的数据读取。解决方法就是，在恢复一开始的时候，对log file中的每个row数据的修改记录进行排序，按照<table, row name, log seq num>为key值进行排序，这样排好序后，同一tablet中的数据就是相邻连续的，每个新tablet server需要读取时，就只需要读其中一部分即可。
+
+log file排序这一过程采用分布式进行，由master协调，先将log file按照64MB进行切分成segment，然后再在不同tablet server中对相应segment进行内排序，最后再外排序。
+
+#### 6.5.2 写GFS commit文件的延迟
+
+有时候写GFS文件会遭遇各种各样的原因导致写入很慢。为了尽量避免写commit log文件时出现延迟问题，每个tablet server中设置了两个log文件，对应两个写log线程，但同时只会有一个log线程负责工作。每当一个log线程写入性能降低时，就会切换到另一个线程，也就是写到另一个log文件中。
+
+Bigtable中每个log记录都有log序列号（log sequence number），因此不用担心log杂乱无章的问题。
+
+
+
+### 6.6 Speeding Up Tablet Recovery
+
+就是说一个tablet server在停止serve一个tablet前，会把memtable中的updates全compact到GFS中。并且会进行两次，第二次是将在第一次compact时新到的update给再次compact到GFS中。相当于下次recover的时候就不需再去从commit log中redo updates了，只需读GFS文件。
+
+
+
+### 6.7 Exploiting Immutability
+
+> SSTable文件不可更改所带来的好处
+
+1. 由于SSTable文件是不可以更改的，所有更改都是追加写的形式（将mutation加入到memtable）。这使得可以高并发地读取SSTable文件，不需任何同步控制。
+
+   唯一需要用到同步控制的是memtable，Bigtable对memtable中每个row采取**写时复制**的策略，因此memtable中的文件依然可以看作是只读的，当有数据写入时，就会复制一份新数据，因此原先数据上在写操作之前的读取操作可以并发执行完（在写操作后的读取操作就得被阻塞？）。
+
+2. 由于SSTable不可更改，因此对于删除数据来说，就转变为垃圾回收过期SSTable的问题。Bigtable中每个SSTable都在metadata table中对应的元数据中注册，过期后就被标记。
+
+3. 由于SSTable不可更改，当tablet进行分裂时，分裂后的新tablets可以直接share原来的SSTable文件。
+
+
+
+> Bigtable感觉就是在GFS之上的一个中间层（让GFS有数据库的感觉了）。
