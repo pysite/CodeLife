@@ -50,6 +50,10 @@ gdb -c core.14276 这里的core.14276是生成的core dump文件
 
 
 
+(gdb) info b 查看当前所有的断点
+
+(gdb) d break 3 删除断点3
+
 (gdb) b _exit.c:32 在exit.c文件的32行打断点
 
 ```c
