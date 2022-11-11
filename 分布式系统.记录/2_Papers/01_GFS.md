@@ -169,7 +169,7 @@ GFS应用程序通过一些技术来适应GFS宽松的一致性模型：append�
 
 chunk lease (the primary) 就是指chunk的复制品中的头，是由Master选出来的，这个chunk lease会为其所有复制品定义一个更新顺序。当要更新一个chunk时，先更新chunk lease，然后再根据这个chunk lease规定的顺序去更新其它复制品。
 
-chunk lease的有效期为60s，master可以给chunkserver发送extension信息来延长chunk lease的有效期。无论是extension一个已有的lease还是grant一个新的lease，这些信息都是附加在心跳包的末尾，不会单独地发送。
+chunk lease的有效期为60s，the primary可以向master请求extension信息来延长chunk lease的有效期。lease extension的请求与回复都是附加在心跳包的末尾，不会单独地发送。master有时候会提前收回the primary的权限（即提前终止一段chunk lease租约）来让这个文件变成暂时的只读。
 
 
 
@@ -179,23 +179,20 @@ write的流程如下（之前的图貌似只是read的流程）：
 
 1. Client向Master询问自己要写的chunk的lease(primary)在哪个chunk server上。（如果此时没有lease则Master会当场选择一个当lease）
 
-2. Master向Client回复chunk lease所在位置。Client会把这个chunk lease也缓存起来。
+2. Master向Client回复chunk lease所在位置。Client会把这个chunk lease的位置信息缓存起来，直到the primary变成unreachable或者不再是the primary了client才会再次询问master。
 
 3. Client向chunkservers中最近的一个server发送自己要写的数据。
-
-   这种Control Flow和Data Flow分离的方法改善了性能。
-
+这种Control Flow和Data Flow分离的方法改善了性能。
    每个chunkserver有个LRU cache来缓存这些暂不能立马使用的数据。
 
-4. Client向chunk lease提交自己的write申请。chunk lease对不同client发送过来的请求进行排序，并运用到自己chunk的更新。
+4. Client向chunk lease提交自己的write申请。chunk lease对不同client发送过来的请求进行编号排序，并运用到自己chunk的更新。
 
 5. chunk lease向其他同组的chunkserver(secondary replica)发送write请求，使得其他的chunkserver上的这些请求的先后顺序和chunk lease的相同。
 
 6. 每个Secondary Replica更新完成后便会向Primary回复。
 
 7. Primary收到所有其他Secondary的回复后才会向Client回复操作完毕。
-
-   如果在这期间有哪一步发生了错误，就认为Client的请求发生了失败，相应修改区域的状态被认为是inconsistent，Client此时会重试几次write，如果重试几次都失败了才会给应用返回Error。
+如果在这期间有哪一步发生了错误，就认为Client的请求发生了失败，相应修改区域的状态被认为是inconsistent，Client此时会重试几次write，如果重试几次都失败了才会给Client上层的应用返回Error。
 
 如果要写入的数据太大，横跨了多个chunk，则数据会被切分，但是还是按照上面的流程进行write。这期间可能别的Client会同时写入其中部分区域。因此最后的结果中有可能包含来自其他Client的数据。此时这区域的状态就是**consistent but undefined**。
 
@@ -205,11 +202,11 @@ write的流程如下（之前的图貌似只是read的流程）：
 
 Data Flow与Control Flow分离以便充分利用网络带宽。
 
-通过在chunkserver间链状传输数据而非树状，也是为了充分利用网络带宽。
+通过在chunkserver间链状传输数据而非树状，也是为了充分利用网络带宽（相当于一台机器不会同时给多个其它机器发送数据）。
 
 机器间的distance是用ip地址来衡量的，client优先把数据给最近的chunkserver。(链状，且貌似必须是replica chunkserver)
 
-并且机器间数据传输采用pipeline，例如有R个replicas串成链，B字节的数据，则整个transfer所需时间为$B/T+RL$，其中T是传输速度，L是两主机间的传播延迟。
+机器间数据传输采用pipeline，因为采用的是全双工的链路，发送数据并不会影响同时接收数据的性能，例如有R个replicas串成链，B字节的数据，则整个transfer所需时间为$B/T+RL$，其中T是传输速度，L是两主机间的传播延迟。
 
 
 
