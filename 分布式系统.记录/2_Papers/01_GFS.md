@@ -1,6 +1,6 @@
 ## Abstract
 
-GFS是一个基于普通硬件的分布式文件系统，具有容错性、高并发等特点。
+GFS是一个针对Google面临的工作负载和硬件环境设计的分布式文件系统，具有容错性、高并发等特点。
 
 
 
@@ -8,11 +8,11 @@ GFS是一个基于普通硬件的分布式文件系统，具有容错性、高�
 
 原则：
 
-1. 分布式系统中组件故障是常态而非偶然；（因此分布式系统必须容错性要高）
+1. 分布式系统中大部分使用的都是普通的硬件，组件故障是常态而非偶然；（因此分布式系统必须容错性要高）
 
 2. 文件都很大（GB/TB级）；（与其管理亿万个KB级小数据，不如一起管理大文件）
 
-3. 大部分文件都是追加写而非覆盖写；文件随机写几乎不存在；数据一旦写入之后只是顺序读；
+3. 大部分文件都是追加写而非覆盖写；文件随机写几乎不存在；数据一旦写入之后基本上只是顺序读；
 
 4. 文件系统API简易，灵活性高；（放宽了一致性模型，简化了文件系统，不会给应用程序带来沉重的负担，比如有一个atomic追加写操作）
 
@@ -37,7 +37,7 @@ GFS是一个基于普通硬件的分布式文件系统，具有容错性、高�
 
 GFS提供和其它文件系统类似的接口函数，例如create、delete、open、close，但并未完全按照POSIX标准实现。GFS中的文件也是目录的树状结构，根据路径名定位一个文件。
 
-GFS提供了两个独特的函数，**snapshot**和**record append**，其中snapshot可以创建一个文件或者目录tree的复制；record append就是支持多用户并发追加写的函数。
+GFS提供了两个独特的函数，**snapshot**和**record append**，其中snapshot可以创建一个文件或者目录tree的复制；record append就是支持多用户并发追加写的原子函数。
 
 
 
@@ -47,42 +47,40 @@ GFS提供了两个独特的函数，**snapshot**和**record append**，其中sna
 
 GFS服务器集群(简称GFS集群)由一个master以及多个chunkserver组成，可以供多个客户端访问。每台都是普通的Linux主机running a user-level server process。一个client和一个server是可以在同一台主机的。
 
-文件被切分成多个chunk，每个chunk有个独一无二的、不可修改的64位"身份证号"chunk handle。chunk在创建的时候由GFS master分配"身份证号"。每个chunk在chunk server以Linux普通文件的形式存储着，远程client想要进行读或写必须要提供chunk handle以及字节范围。默认情况下，每个chunk在不同的chunk server中存储三份复制品，当然用户可以自定义不同的文件空间(namespace)中的复制等级，例如更重要的文件就多复制几份来确保容错、容灾性。
+文件被切分成多个chunk，每个chunk有个独一无二的、不可修改的64位"身份证号"chunk handle。chunk在创建的时候由GFS master分配"身份证号"。每个chunk在chunk server以Linux普通文件的形式存储在本地磁盘，远程client想要进行读或写必须要提供chunk handle以及字节范围。默认情况下，每个chunk在不同的chunk server中存储三份复制品，当然用户可以自定义不同的文件空间(namespace)中的复制等级，例如更重要的文件就多复制几份来确保容错、容灾性。
 
 GFS master中存储了文件系统的metadata，例如the namespaces、访问控制信息(access control)、文件到chunk的map映射、每个chunk的现在位置等。GFS master也负责回收孤儿chunk、移动chunk到另一个chunkserver中去等。GFS master周期性地和所有chunk server发送心跳包(heartbeat message)来给chunk server发送指令以及获取其state等。
 
-GFS中所有数据相关操作都是在相应chunk server中完成。GFS并未实现POSIX API，因此GFS并未连接到Linux中的vnode层。
+GFS中所有元数据查询操作都是去找master server，所有数据相关操作都是直接找相应chunk server。GFS并未实现POSIX API，因此GFS也并未接入到Linux中的vnode层。
 
-GFS client和chunkserver都不需要缓存文件，因为GFS client(目标程序)一般都是会与海量的数据进行操作，因此工作集太大无法缓存。而chunkserver不需要缓存文件是因为底层的Linux系统已经对常访问的文件进行了缓存。
+GFS client和chunkserver都不需要缓存文件，因为GFS client(目标程序)一般都是会与海量的数据进行操作，因此工作集太大无法缓存。而chunkserver不需要缓存文件是因为底层的Linux块缓存系统（buffer cache）已经对常访问的文件数据进行了缓存。
 
 
 
 ### Single Master
 
-GFS中只有一个Master，简化了整个系统的实现，方便进行复杂的chunk存储及其复制的算法。为了避免Master成为GFS的性能瓶颈，规定client在查找chunk时只需要向master请求自己应该去找哪些chunkserver进行后续操作即可。(类似DNS服务)
+GFS中只有一个Master，简化了整个系统的实现，方便进行复杂的chunk存储及其复制的算法。为了避免Master成为GFS的性能瓶颈，规定client在查找chunk时只需要向master请求自己应该去找哪些chunkserver进行后续操作即可，client会将获取到的chunkserver名单缓存一定时间。(类似DNS服务)
 
 读取数据的流程：
 
 1. App向底层Client传入read请求，参数为filename以及byte range；
-2. Client根据byte范围转换成该文件里的chunk index，并发送给master参数filename和chunk index；
-3. Master收到文件名和chunk index后就去文件目录中查找文件及其对应的chunk的"身份证号"，并向client返回chunk handle和chunk locations(chunk所在的chunkserver)。
-4. Client随后在每个chunk对应的chunkserver中选择一个最近的，向chunkserver发送chunk handle和byte range(这个range是指数据在chunk中的range)。
+2. Client根据byte范围转换成该文件里的chunk index（就是byte offset除以chunk size），并发送给master参数filename和chunk index；
+3. Master收到文件名和chunk index后就去文件目录中查找文件及其对应的chunk的"身份证号"，并向client返回chunk handle和chunk locations(chunk所在的chunkservers)。
+4. Client随后在每个chunk对应的chunkservers中选择一个最近的，向chunkserver发送chunk handle和byte range(这个range是指数据在chunk中的range)。
 5. chunkserver最后向client返回相应的data。
 
 > client会缓存"<filename, chunk index> - <chunk handle, chunk locations>"这种键值对(直到键值对过期或文件被重新open)，在之后获取同一chunk中其它数据时便不再需要向Master发送消息了。
->
-> 且client一般会请求连续多个chunk，Master可一次性返回多个chunk的相关信息，而这并不造成extra cost。
->
+>且client一般会请求连续多个chunk，Master可一次性返回多个chunk的相关信息，而这并不造成extra cost。
 > 综上，client和master的消息次数被大大减少，以此来避免master成为整个系统的性能瓶颈。
 
 
 
 ### Chunk Size
 
-chunk大小为64MB，较大的chunk size有如下好处：
+chunk大小为64MB，每个chunk replica以普通文件的形式存储在chunkserver的本地磁盘中，较大的chunk size有如下好处：
 
 1. 减少client和master的通信次数。因为chunk够大，因此后续的几次操作就很可能在同一个chunk上，因此client就只需要再去向chunkserver发送消息即可。
-2. 减少了网络的负担，因为client后续很多操作很可能都是在同一chunk。
+2. 减少了网络的负担，因为client后续很多操作很可能都是在同一chunk，所以可以将client和某个chunkserver的TCP连接额外维持一段时间，以节省建立TCP连接的开销。
 3. 减小了Master中metadata的空间。
 
 然而较大的chunk size也有如下缺点：
@@ -97,9 +95,9 @@ chunk大小为64MB，较大的chunk size有如下好处：
 
 Master的内存中存有三种元数据：1.file and chunk namespaces，2.文件到chunk的映射，3.每个chunk的位置。
 
-前2种元数据是通过日志log(operation log)保存到disk(本地磁盘以及远程磁盘)中进行长期存储。而每个chunk的位置则是由Master每次启动并加入到集群时向每个chunkserver询问得到的。
+运行时，三种元数据都在master server内存中，并且前2种元数据还会通过日志log(operation log)保存到disk(本地磁盘以及复制备份到远程磁盘)中进行持久化存储。而每个chunk的位置则是由Master每次启动并加入到集群时向每个chunkserver询问得到的。
 
-#### In Memory
+#### In-Memory Data Structures
 
 metadata存储在Master的内存中，每个chunk的metadata不超过64B，而每个文件的在file namespace中存储的文件名因为采用了prefix compression所以也不超过64B，因此Master内存足够存储大量的原信息。（不够的话加内存空间即可，方便且可靠）
 
@@ -109,13 +107,15 @@ Master不在自己的disk上存储chunk位置，每次靠询问每个chunserver�
 
 #### Operation Log
 
-Master磁盘中的Operation Log就是整个GFS系统中时间线，上面记录了metadata的发生的change以及它们发生的时间。
+Master磁盘中的Operation Log就是整个GFS系统中时间线，上面记录了metadata的发生的change以及它们发生的时间（logical time）。
 
 Operation Log将存储在本地磁盘and多个远端磁盘中，每次用户操作都必须等operation log在本地和远端disk中都更新完成后才会得到响应。Master会把几个log操作打包在一起批量处理，以此减小更新磁盘和复制备份对系统性能的影响。
 
 Master靠load checkpoint和replay log文件进行恢复。每当现有的log文件超过一定大小后，master便会开始生成checkpoint，这个checkpoint相当于把当前时刻整个memory中的状态进行快照保存起来，随后开始记录新的log文件(旧log文件可以被删除了)。以此来避免log文件无限增长、系统恢复时间过长等问题。（checkpoint也是本地和远程disk中都保存）
 
 如果在checkpoint生成过程中发生故障也没关系，因为还有旧的checkpoint和旧的log。恢复时会选择最新的、完好的checkpoint以及之后的log来进行恢复。
+
+> checkpoint文件以compact B-tree like的格式进行组织，使用checkpoint时只需要把checkpoint映射到内存中便可用来查询namespaces了，因此recovery过程非常快。
 
 
 
@@ -125,15 +125,17 @@ Master靠load checkpoint和replay log文件进行恢复。每当现有的log文�
 
 - File namespace的一致性
 
-File namespace的修改全在Master中完成，通过namespace locking确保原子性和正确性。
+File namespace的修改全在Master中完成，通过namespace locking确保原子性和正确性，通过前面介绍的operation log来定义操作的先后顺序。
 
 - 文件数据的一致性
 
 文件中一段区域是consistent，当且仅当所有用户看这段区域的数据都相同。
 
-文件中一段区域是defined，当且仅当在write后，这段区域是consistent且写入成功。
+文件中一段区域是defined，当且仅当在mutation后，这段区域是consistent且写入成功。
 
-文件中一段区域是undefined，当且仅当write后，这段区域是consistent的，但是"没按照剧本来"。这一般是由于并发的写冲突导致，即多个用户同时写的区域发生了重叠。
+文件中一段区域是undefined，当且仅当mutation后，这段区域是consistent的，但是"没按照剧本来"。这一般是由于并发的写冲突导致，即多个用户同时写的区域发生了重叠。
+
+文件中一段区域是inconsistent（当然也是undefined），当且仅当failed mutation发生时。
 
 ![image-20211031195813371](./images/image003.png)
 
