@@ -254,7 +254,7 @@ GFS中的目录没有特定的数据结构记录一个目录下有哪些文件�
 >
 > 首先snapshot操作，会取得/home和/save的read锁，取得/home/user和/save/user的write锁。
 >
-> 这样create操作，会取得/home的read锁，然后想获取/home/user的read锁（这个操作会被卡住）
+> 与此同时create操作，会取得/home的read锁，然后想获取/home/user的read锁（这个操作会被卡住）
 
 说明：
 
@@ -303,7 +303,11 @@ re-replication的处理顺序也有优先级。Master会选择优先级最高的
 2. replica属于live files的优先（有些replica属于recently deleted file）；
 3. 导致client进程被阻塞的replica优先；
 
-为了避免内部clone操作过于占用性能导致影响GFS处理新的client的请求，Master会限制整个集群、每个chunkserver中同时能够进行的clone操作数量，并且每个chunkserver也会自我限制每个clone操作所能使用的带宽。
+new-replica的存放位置的选择也是会考虑类似之前creation的三个因素（磁盘利用率，最近clone次数，尽量分散在不同机箱）。
+
+为了避免内部clone操作过于占用性能导致影响GFS处理新的client的请求，Master会限制整个集群、每个chunkserver中同时能够进行的clone操作数量，并且每个chunkserver也会自我限制每个clone操作所能使用的带宽（大概通过限制"对其它chunkserver的read请求的执行频率"来实现）。
+
+master会周期性的执行rebalance replicas。当有新的chunkserver加入到集群时，master并不会全部给它新的chunk，而是会在reblance的过程中将旧的chunk也逐渐移动到这个新的chunkserver中，以避免heavy write traffic that comes with new chunks。
 
 
 
@@ -399,3 +403,11 @@ GFS中的服务器（both Master and Chunkserver）都会生成diagnostic log，
 
 通过获取多个服务器的diagnostic log，我们可以把这些RPC请求和响应按时间排列起来进行debug、analysis等。diagnostic log也可以用作分析性能。
 
+
+
+## 个人总结
+
+1. 64MB的chunk
+2. control flow与data flow分离
+3. 大部分写操作都是**追加写**，小部分操作是随机写
+4. 大部分读操作都是顺序读，小部分操作是随机读
