@@ -4,7 +4,7 @@ GFS是一个针对Google面临的工作负载和硬件环境设计的分布式�
 
 
 
-## Introduction
+## 1 Introduction
 
 原则：
 
@@ -18,9 +18,9 @@ GFS是一个针对Google面临的工作负载和硬件环境设计的分布式�
 
 
 
-## Design overview
+## 2 Design overview
 
-### Assumptions
+### 2.1 Assumptions
 
 > 对前面的"原则"进行更加细致的阐述
 
@@ -33,7 +33,7 @@ GFS是一个针对Google面临的工作负载和硬件环境设计的分布式�
 
 6. GFS更看重数据的处理带宽，而非单次操作的延迟。即大多目标程序都更看重海量数据的处理，而很少对个人读写有严格的响应时间要求。
 
-### Interface
+### 2.2 Interface
 
 GFS提供和其它文件系统类似的接口函数，例如create、delete、open、close，但并未完全按照POSIX标准实现。GFS中的文件也是目录的树状结构，根据路径名定位一个文件。
 
@@ -41,7 +41,7 @@ GFS提供了两个独特的函数，**snapshot**和**record append**，其中sna
 
 
 
-### Architecture
+### 2.3 Architecture
 
 ![image-20211031110138761](./images/image001.png)
 
@@ -57,7 +57,7 @@ GFS client和chunkserver都不需要缓存文件，因为GFS client(目标程序
 
 
 
-### Single Master
+### 2.4 Single Master
 
 GFS中只有一个Master，简化了整个系统的实现，方便进行复杂的chunk存储及其复制的算法。为了避免Master成为GFS的性能瓶颈，规定client在查找chunk时只需要向master请求自己应该去找哪些chunkserver进行后续操作即可，client会将获取到的chunkserver名单缓存一定时间。(类似DNS服务)
 
@@ -75,7 +75,7 @@ GFS中只有一个Master，简化了整个系统的实现，方便进行复杂�
 
 
 
-### Chunk Size
+### 2.5 Chunk Size
 
 chunk大小为64MB，每个chunk replica以普通文件的形式存储在chunkserver的本地磁盘中，较大的chunk size有如下好处：
 
@@ -91,7 +91,7 @@ chunk大小为64MB，每个chunk replica以普通文件的形式存储在chunkse
 
    
 
-### Metadata
+### 2.6 Metadata
 
 Master的内存中存有三种元数据：1.file and chunk namespaces，2.文件到chunk的映射，3.每个chunk的位置。
 
@@ -119,7 +119,7 @@ Master靠load checkpoint和replay log文件进行恢复。每当现有的log文�
 
 
 
-### Consistency Model
+### 2.7 Consistency Model
 
 #### Guarantees by GFS
 
@@ -161,11 +161,11 @@ GFS应用程序通过一些技术来适应GFS宽松的一致性模型：append�
 
 
 
-## System Interactions
+## 3 System Interactions
 
 > 背景：使Client与Master的交互尽量少
 
-### Leases and Mutation Order
+### 3.1 Leases and Mutation Order
 
 chunk lease (the primary) 就是指chunk的复制品中的头，是由Master选出来的，这个chunk lease会为其所有复制品定义一个更新顺序。当要更新一个chunk时，先更新chunk lease，然后再根据这个chunk lease规定的顺序去更新其它复制品。
 
@@ -198,7 +198,7 @@ write的流程如下（之前的图貌似只是read的流程）：
 
 
 
-### Data Flow
+### 3.2 Data Flow
 
 Data Flow与Control Flow分离以便充分利用网络带宽。
 
@@ -210,7 +210,7 @@ Data Flow与Control Flow分离以便充分利用网络带宽。
 
 
 
-### Atomic Record Appends
+### 3.3 Atomic Record Appends
 
 一次Apend的数据最多为四分之一的chunk size，如果数据更大则需要进行切分了。
 
@@ -222,7 +222,7 @@ Append的流程和write的流程差不多。除了一点点区别：如果primar
 
 
 
-### Snapshot
+### 3.4 Snapshot
 
 Snapshot用来快速创建file或者directory tree。
 
@@ -234,9 +234,9 @@ Snapshot用来快速创建file或者directory tree。
 
 
 
-## Master Operation
+## 4 Master Operation
 
-### Namespace Management and Locking
+### 4.1 Namespace Management and Locking
 
 很多Master操作都需较长时间，例如snapshot要先收回涉及到的文件的lease，因此GFS允许多个Master操作并发，使用lock来进行必要的互斥。
 
@@ -272,7 +272,7 @@ GFS中目录不需要记录direntry的好处：可以允许同一目录下多个
 
 
 
-### Replica Placement
+### 4.2 Replica Placement
 
 机箱(rack)的读写带宽可能小于机箱内所有主机的读写带宽之和。
 
@@ -283,7 +283,7 @@ GFS中目录不需要记录direntry的好处：可以允许同一目录下多个
 
 
 
-### Creation, Re-replication, Rebalancing
+### 4.3 Creation, Re-replication, Rebalancing
 
 chunk replica被创造时一般是三种情况：1.chunk刚创建，2.re-replication（有replica丢失），3.rebalancing
 
@@ -311,7 +311,7 @@ master会周期性的执行rebalance replicas。当有新的chunkserver加入到
 
 
 
-### Garbage Collection
+### 4.4 Garbage Collection
 
 #### Mechanism
 
@@ -335,7 +335,7 @@ GFS允许为不同file namespace中的文件制定不同的replication和reclama
 
 
 
-### Stale Replica Detection
+### 4.5 Stale Replica Detection
 
 当chunkserver因为某种原因未能成功更新某个chunk时，这个chunk就变为过期的stale。Master为每个chunk维持一个chunk version，来辨别chunk是否过期。
 
@@ -349,11 +349,11 @@ Master会在Garbage Collection中删除过期chunk，并且Master也会在给cli
 
 
 
-##  Fault Tolerance and Diagnosis
+##  5 Fault Tolerance and Diagnosis
 
 > 组件故障是一种normal而非exception。
 
-### High Availability
+### 5.1 High Availability
 
 > 两个基本策略：Fast recovery 和 Replication
 
@@ -379,7 +379,7 @@ Client只可以通过Shadow Master读数据，且必须Client不介意读取的�
 
 同样地，Shadow Master启动时也是跟各个Chunkserver发送信息来获取它们最新存储的chunk名单，同样也周期性地发送心跳包等。
 
-### Data Integrity
+### 5.2 Data Integrity
 
 > A chunk is broken up into 64 KB blocks. Each has a corresponding 32 bit checksum.
 
@@ -395,7 +395,7 @@ Write数据时chunkserver会先读取数据并检验checksum，检验通过再�
 
 chunkserver在子进程中也会周期性地扫描并检验所有chunk，一旦发现有错误chunk便会向Master汇报。
 
-### Diagnostic Tools
+### 5.3 Diagnostic Tools
 
 GFS中的服务器（both Master and Chunkserver）都会生成diagnostic log，这些log可以被随便删除，只是记录了一些关键事件和RPC requsts and replies。
 
